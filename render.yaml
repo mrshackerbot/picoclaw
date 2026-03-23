@@ -1,30 +1,161 @@
-# render.yaml
+# render.yaml - Complete PicoClaw deployment with authentication
+# Copy this file to your GitHub repository and connect to Render
+
 services:
+  # Main PicoClaw service with built-in authentication proxy
   - type: web
     name: picoclaw
     runtime: image
-    image:
-      url: ghcr.io/sipeed/picoclaw:latest
-    dockerCommand: picoclaw gateway
+    plan: starter  # Free tier works! No SSH needed
+    repo: https://github.com/sipeed/picoclaw
+    branch: main
+    
+    # Custom Dockerfile with authentication built-in
+    build:
+      dockerfileContent: |
+        FROM ghcr.io/sipeed/picoclaw:latest
+        
+        # Install nginx for authentication proxy
+        RUN apk add --no-cache nginx apache2-utils curl
+        
+        # Create authentication password (will be overridden by env var)
+        RUN mkdir -p /etc/nginx /run/nginx
+        
+        # Create nginx config with basic auth
+        RUN echo 'events { worker_connections 1024; }' > /etc/nginx/nginx.conf && \
+            echo 'http {' >> /etc/nginx/nginx.conf && \
+            echo '  server {' >> /etc/nginx/nginx.conf && \
+            echo '    listen 8080;' >> /etc/nginx/nginx.conf && \
+            echo '    location / {' >> /etc/nginx/nginx.conf && \
+            echo '      auth_basic "PicoClaw Access";' >> /etc/nginx/nginx.conf && \
+            echo '      auth_basic_user_file /etc/nginx/.htpasswd;' >> /etc/nginx/nginx.conf && \
+            echo '      proxy_pass http://localhost:18800;' >> /etc/nginx/nginx.conf && \
+            echo '      proxy_set_header Host $host;' >> /etc/nginx/nginx.conf && \
+            echo '      proxy_set_header X-Real-IP $remote_addr;' >> /etc/nginx/nginx.conf && \
+            echo '    }' >> /etc/nginx/nginx.conf && \
+            echo '  }' >> /etc/nginx/nginx.conf && \
+            echo '}' >> /etc/nginx/nginx.conf
+        
+        # Create startup script
+        RUN echo '#!/bin/sh' > /start.sh && \
+            echo '# Generate htpasswd from env vars' >> /start.sh && \
+            echo 'if [ -n "$AUTH_USERNAME" ] && [ -n "$AUTH_PASSWORD" ]; then' >> /start.sh && \
+            echo '  echo "$AUTH_PASSWORD" | htpasswd -i -c /etc/nginx/.htpasswd "$AUTH_USERNAME"' >> /start.sh && \
+            echo 'else' >> /start.sh && \
+            echo '  # Default credentials if not set (CHANGE THIS!)' >> /start.sh && \
+            echo '  htpasswd -b -c /etc/nginx/.htpasswd admin picoclaw123' >> /start.sh && \
+            echo 'fi' >> /start.sh && \
+            echo '' >> /start.sh && \
+            echo '# Generate PicoClaw config from environment variables' >> /start.sh && \
+            echo 'mkdir -p /data/picoclaw' >> /start.sh && \
+            echo 'cat > /data/picoclaw/config.json << EOF' >> /start.sh && \
+            echo '{' >> /start.sh && \
+            echo '  "model_list": [' >> /start.sh && \
+            echo '    {' >> /start.sh && \
+            echo '      "model_name": "${DEFAULT_MODEL:-gpt-4o-mini}",' >> /start.sh && \
+            echo '      "model": "openrouter/${DEFAULT_MODEL:-gpt-4o-mini}",' >> /start.sh && \
+            echo '      "api_key": "${OPENROUTER_API_KEY}"' >> /start.sh && \
+            echo '    }' >> /start.sh && \
+            echo '  ],' >> /start.sh && \
+            echo '  "agents": {' >> /start.sh && \
+            echo '    "defaults": {' >> /start.sh && \
+            echo '      "workspace": "/data/picoclaw/workspace",' >> /start.sh && \
+            echo '      "model": "${DEFAULT_MODEL:-gpt-4o-mini}",' >> /start.sh && \
+            echo '      "restrict_to_workspace": true' >> /start.sh && \
+            echo '    }' >> /start.sh && \
+            echo '  },' >> /start.sh && \
+            echo '  "channels": {' >> /start.sh && \
+            echo '    "telegram": {' >> /start.sh && \
+            echo '      "enabled": ${TELEGRAM_ENABLED:-false},' >> /start.sh && \
+            echo '      "token": "${TELEGRAM_BOT_TOKEN}",' >> /start.sh && \
+            echo '      "allow_from": ["${TELEGRAM_USER_ID}"]' >> /start.sh && \
+            echo '    }' >> /start.sh && \
+            echo '  },' >> /start.sh && \
+            echo '  "tools": {' >> /start.sh && \
+            echo '    "web": {' >> /start.sh && \
+            echo '      "duckduckgo": {' >> /start.sh && \
+            echo '        "enabled": ${WEB_SEARCH_ENABLED:-true}' >> /start.sh && \
+            echo '      }' >> /start.sh && \
+            echo '    }' >> /start.sh && \
+            echo '  }' >> /start.sh && \
+            echo '}' >> /start.sh && \
+            echo 'EOF' >> /start.sh && \
+            echo '' >> /start.sh && \
+            echo '# Start nginx (auth proxy) and PicoClaw launcher' >> /start.sh && \
+            echo 'nginx &' >> /start.sh && \
+            echo 'cd /data/picoclaw' >> /start.sh && \
+            echo 'exec picoclaw-launcher' >> /start.sh && \
+            chmod +x /start.sh
+        
+        EXPOSE 8080
+        CMD ["/start.sh"]
+    
+    environment:
+      # Authentication (set these in Render dashboard)
+      - key: AUTH_USERNAME
+        sync: false
+        value: "admin"  # Change this!
+      - key: AUTH_PASSWORD
+        sync: false
+        generateValue: true  # Render generates random password
+      
+      # LLM Configuration (set in dashboard)
+      - key: OPENROUTER_API_KEY
+        sync: false
+        # Get from: https://openrouter.ai/keys
+      
+      # Model Configuration
+      - key: DEFAULT_MODEL
+        value: "gpt-4o-mini"
+      
+      # Telegram Integration (optional - set if you want Telegram access)
+      - key: TELEGRAM_ENABLED
+        value: "false"  # Set to "true" to enable
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_USER_ID
+        sync: false
+      
+      # Web Search
+      - key: WEB_SEARCH_ENABLED
+        value: "true"
+      
+      # PicoClaw Gateway Configuration
+      - key: PICOCLAW_GATEWAY_HOST
+        value: "0.0.0.0"
+      - key: PICOCLAW_HOME
+        value: "/data/picoclaw"
+    
+    # Persistent storage for all data
+    disks:
+      - name: picoclaw-data
+        mountPath: /data
+        sizeGB: 1
+        # ⚠️ NEVER DELETE - stores all config, chat history, and workspace
+    
+    # Health check endpoint
+    healthCheckPath: /
+    
+    # Single instance is enough
+    numInstances: 1
+    
+    # Choose region closest to you
+    region: oregon
+
+# Optional: Add a cron job for periodic tasks (like checking email)
+  - type: cron
+    name: picoclaw-heartbeat
+    schedule: "0 */6 * * *"  # Every 6 hours
+    runtime: image
+    repo: https://github.com/sipeed/picoclaw
+    build:
+      dockerfileContent: |
+        FROM ghcr.io/sipeed/picoclaw:latest
+        CMD ["picoclaw", "agent", "-m", "Execute heartbeat tasks from HEARTBEAT.md"]
     envVars:
-      - key: PICOCLAW_CONFIG_JSON
-        value: |
-          {
-            "model_list": [
-              {
-                "model_name": "gpt-4o-mini",
-                "model": "openrouter/free",
-                "api_key": "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"
-              }
-            ],
-            "agents": {
-              "defaults": {
-                "workspace": "/data/picoclaw/workspace",
-                "model": "openrouter/free",
-                "restrict_to_workspace": true
-              }
-            }
-          }
+      - key: PICOCLAW_HOME
+        value: "/data/picoclaw"
+      - key: OPENROUTER_API_KEY
         sync: false
     disks:
       - name: picoclaw-data
