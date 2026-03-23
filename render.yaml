@@ -1,0 +1,50 @@
+# render.yaml - Deploy PicoClaw on Render
+# Based on official PicoClaw Docker configuration
+# ⚠️ Security Warning: Do not deploy to production until v1.0 release (early development)
+
+services:
+  - type: web
+    name: picoclaw
+    runtime: image
+    repo: https://github.com/sipeed/picoclaw
+    plan: starter  # PicoClaw is very lightweight (10-20MB RAM)
+    image:
+      # Use the launcher image which includes web UI and all binaries
+      url: ghcr.io/sipeed/picoclaw:latest
+    dockerCommand: /usr/local/bin/picoclaw-launcher
+    envVars:
+      # Gateway Configuration
+      - key: PICOCLAW_GATEWAY_HOST
+        value: "0.0.0.0"  # Required for Render to access the gateway
+      - key: PICOCLAW_GATEWAY_PORT
+        value: "18790"  # Default gateway port
+      
+      # Web Launcher Configuration (uses port 18800 by default)
+      # The launcher starts on port 18800 and manages the gateway process
+      
+      # Path Configuration (using persistent disk mounts)
+      - key: PICOCLAW_HOME
+        value: "/data/picoclaw"
+      - key: PICOCLAW_CONFIG
+        value: "/data/picoclaw/config.json"
+      
+      # Optional: Disable heartbeat if not needed
+      # - key: PICOCLAW_HEARTBEAT_ENABLED
+      #   value: "false"
+      
+      # Optional: Set default model (add after config is created)
+      # - key: PICOCLAW_DEFAULT_MODEL
+      #   value: "openrouter/gpt-4o-mini"
+    
+    disks:
+      - name: picoclaw-data
+        mountPath: /data
+        sizeGB: 2  # Stores config, workspace, sessions, memory, etc.
+        # Critical: /data/picoclaw/workspace contains all chat history and state
+    
+    healthCheckPath: /health  # Gateway health endpoint (verify if available)
+    numInstances: 1
+    region: oregon  # Choose region closest to you
+    
+    # ⚠️ IMPORTANT: The web console (port 18800) has NO AUTHENTICATION
+    # Do NOT expose this publicly without adding auth in front
