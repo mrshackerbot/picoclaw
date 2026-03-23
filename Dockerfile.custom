@@ -1,0 +1,11 @@
+FROM ghcr.io/sipeed/picoclaw:latest
+
+# Create entrypoint that writes config from env var
+RUN echo '#!/bin/sh\n\
+if [ -n "$PICOCLAW_CONFIG_JSON" ]; then\n\
+  mkdir -p /data/picoclaw\n\
+  echo "$PICOCLAW_CONFIG_JSON" > /data/picoclaw/config.json\n\
+fi\n\
+exec picoclaw gateway\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
